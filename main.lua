@@ -278,7 +278,55 @@ end
 --======================= UART初始化函数 =======================
 
 
---======================= 设备初始化函数 =======================
+--======================= 获取设备状态=======================
+local function deviceStatus()
+    log.info("RAM free size:", 1024 - math.floor(collectgarbage("count")), "KB")
+    log.info("ROM free size:", rtos.get_fs_free_size(0,1), "KB")
+    log.info("hardware: ",rtos.get_hardware())
+    log.info("firmware version: ",rtos.get_version())
+    log.info("task messgae queue : ",rtos.get_env_usage(),"%")
+    --log.info("internal total space: ",rtos.get_fs_total_size(0,1),'KB')
+    --log.info("internal free space: ",rtos.get_fs_free_size(0,1),'KB')
+    log.info("tf card total space: ",rtos.get_fs_total_size(1,1),'KB')
+    log.info("tf card free space: ",rtos.get_fs_free_size(1,1),'KB')
+    log.info("===========================================")
+end
+
+function sdCardTask()
+    sys.wait(5000)
+    --挂载SD卡,返回值0表示失败，1表示成功
+    --io.mount(io.SDCARD)
+    
+    --第一个参数1表示sd卡,第二个参数1表示返回的总空间单位为KB
+    local sdCardTotalSize = rtos.get_fs_total_size(1,1)
+    log.info("sd card total size "..sdCardTotalSize.." KB")
+    
+    local sdCardFreeSize = rtos.get_fs_free_size(1,1)
+    log.info("sd card free size "..sdCardFreeSize.." KB")
+        
+    --遍历读取sd卡根目录下的最多10个文件或者文件夹
+    if io.opendir("/sdcard0") then
+        for i=1,10 do
+            local fType,fName,fSize = io.readdir()
+            if fType==32 then
+                log.info("sd card file: ",fName,fSize)               
+            elseif fType == nil then
+                break
+            end
+        end        
+        io.closedir("/sdcard0")
+    end
+    
+    --向sd卡根目录下写入一个pwron.mp3
+    io.writeFile("/sdcard0/pwron.mp3",io.readFile("/lua/pwron.mp3"))
+    --播放sd卡根目录下的pwron.mp3
+    audio.play(0,"FILE","/sdcard0/pwron.mp3",audiocore.VOL1,function() sys.publish("AUDIO_PLAY_END") end)
+    sys.waitUntil("AUDIO_PLAY_END")    
+    
+    --卸载SD卡，返回值0表示失败，1表示成功
+    --io.unmount(io.SDCARD)
+end
+
 
 function deviceInit()
 	--1.01
@@ -353,15 +401,19 @@ function deviceInit()
 	--1.14
 	--网络初始化及连接MQTT服务器
 
+    --挂载TF卡并获取剩余空间
+    sys.wait(5000)
+    --挂载SD卡,返回值0表示失败，1表示成功
+    io.mount(io.SDCARD)
+
     --每5秒打印一下RAM和ROOM剩余空间
-    sys.timerLoopStart(function()  log.info("RAM free size:", 1024 - math.floor(collectgarbage("count")), "KB")
-        log.info("ROM free size:", rtos.get_fs_free_size(0,1), "KB") end, 5000)
-	
+    sys.timerLoopStart(deviceStatus, 5000)
+
 end
 
 function MainTask()
     deviceInit()
-    
+    sdCardTask()
     while true do
         sys.wait(1000)
     end
