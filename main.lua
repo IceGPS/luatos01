@@ -22,6 +22,8 @@ require "socket4G"
 require "socketESP8266"
 require "mqtt"
 
+--App代码
+require "uartdata"
 
 --======================= 全局常量和管脚定义 =======================
 DEBUGMODE = true
@@ -169,7 +171,8 @@ end
 
 --电源键长按
 local function PwrKeyLongTimeCallBack()
-    audio.play(1, "TTS", "关机", audiovolume)  --但是好像没有声音，不知道是不是需要增加延时。这里不是Task，sys.wait函数不能使用
+    audio.play(0,"TTS","关机",audiocore.VOL1,function() sys.publish("AUDIO_PLAY_END") end)
+    sys.waitUntil("AUDIO_PLAY_END")    
     rtos.poweroff()
 end
 
@@ -177,59 +180,9 @@ end
 local function PwrKeyShortTimeCallBack()
 end
 
---======================= 定位数据处理函数 =======================
---定位数据接收完整性处理
---根据定时器判断GPS数据接收完整之后，就做两件事，
---1）、从中提取GGA消息，然后解析GGA消息
---2）、将RTCM数据发送到云端的MQTT服务器或者NTRIP服务器
-
-
---NMEA0183校验和检查
-local function checkSum(str)
-	local sum = 0
-	for i = 2, #str do
-		sum = bit.bxor(sum, string.byte(str, i))
-	end
-	return sum
-end
-
---从NMEA0183 GGA消息中提取所有数据
-local function getGGAData(str)
-	local data = {}
-	local i = 1
-	for v in string.gmatch(str, "[^,]+") do
-		data[i] = v
-		i = i + 1
-	end
-	return data
-end
-
-
 --======================= NVM初始化 =======================
 --NVM读写的参数需要放到config.lua文件中，这里只是读写config.lua文件中的参数
 
-
-
---======================= AT指令分析处理函数 =======================
---AT指令有三个来源，USB串口，蓝牙SPP，蓝牙BLE
-
-
---======================= UART初始化和数据接收函数 =======================
-    --wifi模组使用UART1，但是由于ESP8266通信库中已经打开了UART1，所以这里不能再打开UART1
-local function initUART()
-    --打开USB虚拟串口，由于是虚拟串口，因此速率不起作用
-    uart.setup(uart.USB, 0, 8, uart.PAR_NONE, uart.STOP_1)
-    uart.on(uart.USB, "receive", USBreader)
-
-	--RTK模组的通信速率可以提高到921600
-    uart.setup(RTKUART, 115200, 8, uart.PAR_NONE, uart.STOP_1)
-    uart.on(RTKUART, "receive", RTKreader)
-
-	--蓝牙模组的通信速率可以提高到921600，TI这个模组SPP模式下实测可以超过50KB/s
-    uart.setup(BTUART, 115200, 8, uart.PAR_NONE, uart.STOP_1)
-    uart.on(BTUART, "receive", BTreader)
-
-end
 
 --======================= 蓝牙相关函数 =======================
     --判断蓝牙连接状态
@@ -245,13 +198,15 @@ end
             pins.setup(PIN_BT_RESET,0)
             sys.wait(50)
             pins.setup(PIN_BT_RESET,1)
-            sys.wait(100)
+            sys.wait(1000)
         end        
         --如果是未连接状态，就可以发送AT指令设置蓝牙名称
         if not GetBTConnection() then
-            uart.write(BTUART,'AT+NAME='..BTname..'\r\n') 
+            uartdata.btwrite('AT\r\n') 
             sys.wait(50)
-            uart.write(BTUART,'AT+LENAME='..BLEname..'\r\n') 
+            uartdata.btwrite('AT+NAME='..BTname..'\r\n') 
+            sys.wait(50)
+            uartdata.btwrite('AT+LENAME='..BLEname..'\r\n') 
             sys.wait(50)
         end
     end
@@ -267,24 +222,55 @@ end
 --蓝牙指示灯直接根据蓝牙状态管脚的电平来判断蓝牙连接状态
 --RTK指示灯根据GGA消息中的定位状态来判断，如果在有IMU的机型上，还需要判断IMU的校准状态
 --电源指示灯的状态更新函数
-local function ledsTask()
-	while true do
-		--BT  LED 
-		if GetBTConnection() then
-			led("bt","GREEN")
-		else
-			led("bt","BLACK")
-		end
-		
-		--PWR LED 
-		batteryVoltage = 
+local function ledsUpdate()
+    while true do
+	--RTK LED
+        if uartdata.RTKFixQuality <1  then 
+            led('gps','BLACK') -- 未定位，不亮
+        else
+            if uartdata.RTKFixQuality <4 then 
+                led('gps','RED') -- 单点定位，红灯
+            else
+                if uartdata.RTKFixQuality == 4 then 
+                    led('gps','GREEN') -- RTK固定，绿灯
+                else
+                    if uartdata.RTKFixQuality == 5 then 
+                        led('gps','YELLOW') -- RTK浮动，黄灯
+                    else  
+                        led('gps','RED') -- -- 大于5的情况，视为单点定位
+                    end
+                end
+            end
+        end
 
-		--RTK LED 
+	--BT  LED 
+	if GetBTConnection() then
+		led("bt","GREEN")
+	else
+		led("bt","BLACK")
+	end
+	
+	--PWR LED 
+	adcvol, batteryVoltage = adc.read(ADC_VBAT)
+	adcvol, powerVoltage = adc.read(ADC_PWR)
+	batteryVoltage = math.floor(batteryVoltage *2)
+	powerVoltage = math.floor(powerVoltage *2)
+	batteryPercent = math.floor((batteryVoltage-3400)/(42-34))   --只要百分比的整数部分
+	log.info("Battery voltage: ",batteryVoltage,'mv')
+	log.info("Power voltage: ",powerVoltage,'mv')
+	log.info("Battery pencent: ",batteryPercent,'%')
 
+	if batteryPercent > 67 then
+		led('pwr','GREEN')
+	elseif batteryPercent > 33 then
+		led('pwr','YELLOW')
+	else
+		led('pwr','RED')
+	end
 
-		--NET LED
-		
-		sys.wait(1000)
+	--NET LED
+	
+	sys.wait(1000)
 	end
 end
 
@@ -339,7 +325,9 @@ local function sdCardTask()
     --向sd卡根目录下写入一个pwron.mp3
     --io.writeFile("/sdcard0/1.mp3",io.readFile("/lua/pwron.mp3"))
     --audio.play(0,"FILE","/lua/pwron.mp3",audiocore.VOL2,function() sys.publish("AUDIO_PLAY_END") end)
-    audio.play(0,"FILE","/sdcard0/pwron.mp3",audiocore.VOL2,function() sys.publish("AUDIO_PLAY_END") end)
+    audio.play(0,"FILE","/sdcard0/pwron.mp3",audiocore.VOL1,function() sys.publish("AUDIO_PLAY_END") end)
+    sys.waitUntil("AUDIO_PLAY_END")    
+    audio.play(0,"TTS","开机",audiocore.VOL1,function() sys.publish("AUDIO_PLAY_END") end)
     sys.waitUntil("AUDIO_PLAY_END")    
 
 	--卸载SD卡，返回值0表示失败，1表示成功
@@ -370,14 +358,16 @@ function deviceInit()
     --打开电压域,BW10
     pmd.ldoset(2, pmd.LDO_VLCD)  --没有这一行电源灯G不亮，定位灯RG都不亮
     pmd.ldoset(2,pmd.LDO_VSIM1) -- GPIO 29、30、31
-    pmd.ldoset(15,pmd.LDO_VMMC) -- GPIO 24、25、26、27、28
+    pmd.ldoset(15,pmd.LDO_VMMC) -- GPIO 24、25、26、27、28, SD卡需要3.1V电压，所以这里用15
         
 	--1.06
-    --打开电源,BW10
+    --打开电源,打开ADC
     pins.setup(PIN_3V3, 1) -- 3.3V供电打开 
     pins.setup(PIN_AMP, 1) -- 功放IC power on, 功放不打开就不会有声音 
     pins.setup(PIN_WIFI_RESET, 0) --保持拉低状态WIFI模组才能正常工作，这里拉低控制的是WIFI模组的GPIO15管脚
-
+    adc.open(ADC_PWR)
+    adc.open(ADC_VBAT)
+    --点亮一遍指示灯，仪式感和让用户开机的时候确认指示灯是否有损坏
     leds_marquee()
 
 	--1.07
@@ -419,20 +409,35 @@ function deviceInit()
 	--1.14
 	--网络初始化及连接MQTT服务器
 
+	--1.15 设置蓝牙设备名称
+    deviceIMEI = misc.getImei()
+    --deviceICCID = sim.getIccid()
+    sixchar = string.sub(deviceIMEI,#deviceIMEI-5)
+	btname = 'IceRTK_'..sixchar..'_SPP'
+	blename = 'IceRTK_'..sixchar..'_BLE'
+	SetBTName(btname,blename)
+
     --每5秒打印一下RAM和ROOM剩余空间
-    sys.timerLoopStart(deviceStatus, 5000)
+    --sys.timerLoopStart(deviceStatus, 5000)
 
 end
 
 function MainTask()
-    deviceInit()
+	--初始化部分
+	uartdata.Init()
+	deviceInit()
+	sys.taskInit(sdCardTask)
+	sys.taskInit(uartdata.Task)
+	
     while true do
+        ledsUpdate()
         sys.wait(1000)
     end
 end
 
-sys.taskInit(sdCardTask)
+--任务部分
 sys.taskInit(MainTask)
+
 --1表示充电开机的时候不启动GSM协议栈
 sys.init(1, 0)
 sys.run()
