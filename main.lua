@@ -1,5 +1,5 @@
-PROJECT = 'test'
-VERSION = '2.0.0'
+PROJECT = 'BW10'
+VERSION = '0.0.2'
 require 'log'
 LOG_LEVEL = log.LOGLEVEL_TRACE
 require "sys"
@@ -255,7 +255,6 @@ end
             sys.wait(50)
         end
     end
-    
 
 
 --======================= 网络初始化 =======================
@@ -268,8 +267,25 @@ end
 --蓝牙指示灯直接根据蓝牙状态管脚的电平来判断蓝牙连接状态
 --RTK指示灯根据GGA消息中的定位状态来判断，如果在有IMU的机型上，还需要判断IMU的校准状态
 --电源指示灯的状态更新函数
-local function DeviceLeds()
+local function ledsTask()
+	while true do
+		--BT  LED 
+		if GetBTConnection() then
+			led("bt","GREEN")
+		else
+			led("bt","BLACK")
+		end
+		
+		--PWR LED 
+		batteryVoltage = 
 
+		--RTK LED 
+
+
+		--NET LED
+		
+		sys.wait(1000)
+	end
 end
 
 --======================= UART初始化函数 =======================
@@ -285,31 +301,34 @@ local function deviceStatus()
     log.info("hardware: ",rtos.get_hardware())
     log.info("firmware version: ",rtos.get_version())
     log.info("task messgae queue : ",rtos.get_env_usage(),"%")
-    --log.info("internal total space: ",rtos.get_fs_total_size(0,1),'KB')
-    --log.info("internal free space: ",rtos.get_fs_free_size(0,1),'KB')
     log.info("tf card total space: ",rtos.get_fs_total_size(1,1),'KB')
     log.info("tf card free space: ",rtos.get_fs_free_size(1,1),'KB')
     log.info("===========================================")
 end
 
-function sdCardTask()
+local function sdCardTask()
     sys.wait(5000)
     --挂载SD卡,返回值0表示失败，1表示成功
-    --io.mount(io.SDCARD)
+	
+    log.info("=======================Mount SD card: ",io.mount(io.SDCARD))
     
-    --第一个参数1表示sd卡,第二个参数1表示返回的总空间单位为KB
+    --第一个参数1表示sd卡
+    --第二个参数1表示返回的总空间单位为KB
     local sdCardTotalSize = rtos.get_fs_total_size(1,1)
     log.info("sd card total size "..sdCardTotalSize.." KB")
     
+    --第一个参数1表示sd卡
+    --第二个参数1表示返回的总空间单位为KB
     local sdCardFreeSize = rtos.get_fs_free_size(1,1)
     log.info("sd card free size "..sdCardFreeSize.." KB")
-        
+    
+    
     --遍历读取sd卡根目录下的最多10个文件或者文件夹
     if io.opendir("/sdcard0") then
         for i=1,10 do
             local fType,fName,fSize = io.readdir()
             if fType==32 then
-                log.info("sd card file: ",fName,fSize)               
+                log.info("sd card file",fName,fSize)               
             elseif fType == nil then
                 break
             end
@@ -318,13 +337,13 @@ function sdCardTask()
     end
     
     --向sd卡根目录下写入一个pwron.mp3
-    io.writeFile("/sdcard0/pwron.mp3",io.readFile("/lua/pwron.mp3"))
-    --播放sd卡根目录下的pwron.mp3
-    audio.play(0,"FILE","/sdcard0/pwron.mp3",audiocore.VOL1,function() sys.publish("AUDIO_PLAY_END") end)
+    --io.writeFile("/sdcard0/1.mp3",io.readFile("/lua/pwron.mp3"))
+    --audio.play(0,"FILE","/lua/pwron.mp3",audiocore.VOL2,function() sys.publish("AUDIO_PLAY_END") end)
+    audio.play(0,"FILE","/sdcard0/pwron.mp3",audiocore.VOL2,function() sys.publish("AUDIO_PLAY_END") end)
     sys.waitUntil("AUDIO_PLAY_END")    
-    
-    --卸载SD卡，返回值0表示失败，1表示成功
-    --io.unmount(io.SDCARD)
+
+	--卸载SD卡，返回值0表示失败，1表示成功
+	--io.unmount(io.SDCARD)
 end
 
 
@@ -351,7 +370,7 @@ function deviceInit()
     --打开电压域,BW10
     pmd.ldoset(2, pmd.LDO_VLCD)  --没有这一行电源灯G不亮，定位灯RG都不亮
     pmd.ldoset(2,pmd.LDO_VSIM1) -- GPIO 29、30、31
-    pmd.ldoset(2,pmd.LDO_VMMC) -- GPIO 24、25、26、27、28
+    pmd.ldoset(15,pmd.LDO_VMMC) -- GPIO 24、25、26、27、28
         
 	--1.06
     --打开电源,BW10
@@ -397,14 +416,8 @@ function deviceInit()
 	--1.13
 	--打开配置并打开UART接口
 
-
 	--1.14
 	--网络初始化及连接MQTT服务器
-
-    --挂载TF卡并获取剩余空间
-    sys.wait(5000)
-    --挂载SD卡,返回值0表示失败，1表示成功
-    io.mount(io.SDCARD)
 
     --每5秒打印一下RAM和ROOM剩余空间
     sys.timerLoopStart(deviceStatus, 5000)
@@ -413,12 +426,12 @@ end
 
 function MainTask()
     deviceInit()
-    sdCardTask()
     while true do
         sys.wait(1000)
     end
 end
 
+sys.taskInit(sdCardTask)
 sys.taskInit(MainTask)
 --1表示充电开机的时候不启动GSM协议栈
 sys.init(1, 0)
