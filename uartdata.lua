@@ -4,6 +4,8 @@ require "bit"
 require "pins"
 require "uart"
 
+--require "nvmdata"
+
 --UART定义
 local UART1 = 1
 local UART2 = 2
@@ -14,47 +16,10 @@ RTKUART = UART2
 BTUART = UART3
 USBUART = uart.USB
 
---[[
-    数据传输方向和作用
-    1、定位数据的传输
-        RTK -> BT           定位数据通过蓝牙发送给手簿等设备，这是第一重要的数据发送功能
-        RTK -> USB          定位数据通过USB虚拟串口发送给电脑，便于使用电脑上的数据处理功能进行采集和分析，这个功能第二重要
-
-    2、差分数据的传输
-        BT -> RTK           通过蓝牙接收手簿发来的RTCM数据实现差分，这是RTK设备的最基础功能
-        LORA -> RTK         通过LORA接收便携基站发送的RTCM数据实现差分，这个功能对国外客户非常关键
-        RS232 -> RTK        把RS232串口上外挂的数传电台接受到的RTCM数据发送给RTK实现差分，这是现在国外非常需要的RTK功能
-        WIFI+MQTT -> RTK    通过WIFI连接MQTT服务器上传或者接收RTCM差分数据   
-        WIFI+NTRIP -> RTK   通过WIFI连接NTRIP服务器上传或者接收RTCM差分数据
-        4G+MQTT -> RTK      通过4G连接MQTT服务器上传或者接收RTCM差分数据   
-        4G+NTRIP -> RTK     通过4G连接NTRIP服务器上传或者接收RTCM差分数据
-
-    3、配置指令的传输，配置指令有USB和BT两个来源，按指令作用可以分为两种，对终端设备进行配置的指令，对RTK模组进行配置的指令
-        USB -> 终端+RTK 
-        BT -> 终端+RTK
-
-    4、定位数据的完整性处理
-        LUAT模组从RTK模组读取数据的时候不能保证报文的完整性，但是某些传输途径要求数据完整，这就需要在接收时候进行判断处理。
-
-        需要发送完整数据的是4G、WIFI网络通信场景，一来数据完整才能确保实现差分，二来串口WIFI模块的通信能力有限，每秒不能发送太多的消息。
-        1）、MQTT上传RTCM差分数据
-        2）、NTRIP上传RTCM差分数据
-        3）、MQTT接收RTCM差分数据
-        4）、NTRIP接收RTCM差分数据
-
-        为了保证接收到的定位数据是完整的，有两种实现思路
-        1）、标准做法，根据NMEA0183和RTCM3.3的定义把收到的数据包拼接然后拆分成独立的消息。彻底解决问题，但是难度最大，并且产品不需要做RTCM数据的解码。
-        2）、简易做法，根据时间延迟判断数据传输是否完成。每次收到数据的时候都启动一个100ms的单次定时器并更新时间标记，在定时器激活的时候检查当前时间和标记时间相差是否达到100ms，如果达到就认为数据接收完成，就启动发送。
-            这个做法的弱点是验证依赖空闲时间，只适合网络基站的1HZ低频定位场景。
-
-        先计算一下每次从RTK模组接收数据使用的时间，用loginfo打印出来看看，每次收到的字节数和距离上次接收数据的时间ms
-
-]]
-
 --UART之间是否转发数据的标记
 USBRTK = 1
 USBBT = 0
-RTKBT = 1
+RTKBT = 0
 
 --NMEA0183格式的定位消息
 gnggastrstr = ''
@@ -120,7 +85,6 @@ end
 local function RTKdatatimer()   
     RTKdata['RTCM'] = RTCMRAWdata
     RTKdata['GGA'] = gnggastr
-    --log.info('-------------------RTK data timer')
     if gnggastr == nil then 
         log.error('-------------------gnggastr is nil') 
     elseif string.len(gnggastr) < 30 then
@@ -139,27 +103,46 @@ local function RTKdatatimer()
     gnggastr = ''    
 end
 
+--[[
+    三种类型的自定义AT指令，开头的三个字母分别是：
+    1、ICE，直接控制串口转发的指令，立即生效
+    2、NVM，保存到NVM的产品配置参数，下次开机生效
+    3、RTK，直接发送给RTK模块的配置命令，立即生效
+    自定义AT指令来自于USB串口或者蓝牙SPP串口，是否支持BLE待定
+]]
 local function PrivateATCheck(s)
-    local atprefix = string.sub(s,1,3)
-    if atprefix == 'BH+' then  -- 判断收到的数据是不是以“BH+”三个字母开始的，如果想用AT开始，就需要写AT指令的处理函数
-        local a = string.find(s,'=',4,1)
-        local atcommand = string.sub(s,4, a-1)   -- 1表示简单查找，不用正则表达式
+    if string.len(s) > 10 then
+        local atprefix = string.sub(s,1,4)
+        local a = string.find(s,'=',5,1)
+        local atcommand = string.sub(s,5, a-1)   -- 1表示简单查找，不用正则表达式
         local atparameters = string.sub(s,a+1 ) 
-        log.info("AT:"..s)
-        log.info("AT command:"..atcommand)
-        log.info("AT Parameters:"..atparameters)
-        if string.find(atcommand,'USBRTK',1) == 1 then -- 以简单查找方式确认是否找到相应AT指令
-            USBRTK = tonumber(atparameters)
-        elseif string.find(atcommand,'USBBT',1)  == 1 then
-            USBBT = tonumber(atparameters)
-        elseif string.find(atcommand,'RTKBT',1)  == 1 then
-            RTKBT = tonumber(atparameters)
+        if atprefix == 'ICE+' then  -- 判断收到的数据是不是以“ICE+”三个字母开始的
+            if string.find(atcommand,'USBRTK',1) == 1 then -- 以简单查找方式确认是否找到相应AT指令
+                USBRTK = tonumber(atparameters)
+            elseif string.find(atcommand,'USBBT',1)  == 1 then
+                USBBT = tonumber(atparameters)
+            elseif string.find(atcommand,'RTKBT',1)  == 1 then
+                RTKBT = tonumber(atparameters)
+            end
+            return true
+        elseif atprefix == 'NVM+' then      --NVM开头的指令都保存到NVM中，不做缓冲，立即生效
+            nvm.set(atcommand,atparameters)
+            nvm.flush()
+            return true
+        elseif atprefix == 'RTK+' then      --RTK开头的指令都直接发送给RTK模块
+            rtkwrite(atparameters.."\r\n")
+            return true
+        else    
+            return flase
         end
-        return true
     else
-        return flase
+        --log.info("======================AT command too short====================")
+        --log.info("AT command:",s)
+        return false
     end
 end
+
+
 
 -- BT连接状态
 local getGpio22Input = pins.setup(pio.P0_22) 
@@ -250,8 +233,6 @@ end
 
 function Task()    
     while true do
-	log.info("RTK Fix status: ",RTKFixQuality)
-	log.info("Elevation: ",RTKElevation)
         sys.wait(1000)
     end
 end

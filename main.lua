@@ -24,6 +24,7 @@ require "mqtt"
 
 --App代码
 require "uartdata"
+--require "nvmdata"
 
 --======================= 全局常量和管脚定义 =======================
 DEBUGMODE = true
@@ -128,8 +129,7 @@ audioVolume = 1
 batteryPercent = 0
 batteryVoltage = 0
 
-
---======================= 长按关机函数 ====================
+--======================= 按键设置部分 ====================
 --[[
 下面的两个函数实现的是在松开长按的电源键之前先熄灯，通过注册按键消息回调函数实现。
 需要在Init初始化函数中进行注册
@@ -169,6 +169,18 @@ local function keyMsg(msg)
     end
 end
 
+function VoiceBatteryandSOC()
+    local VBattStr = '电压'..string.format("%1.1f",batteryVoltage/1000)..'伏'..
+        ',电量百分之'..string.format("%.0f",batteryPercent)
+    if uartdata.RTKdata['FIX'] ~= nil then
+        if uartdata.RTKdata['FIX'] > 0 then
+            VBattStr = VBattStr..',海拔'..string.format('%d',uartdata.RTKdata['ELEV'])..'米'
+        end
+    end
+    log.info(VBattStr)
+    audio.play(0,"TTS",VBattStr,audioVolume)
+end
+
 --电源键长按
 local function PwrKeyLongTimeCallBack()
     audio.play(0,"TTS","关机",audiocore.VOL1,function() sys.publish("AUDIO_PLAY_END") end)
@@ -178,6 +190,39 @@ end
 
 --电源键短按
 local function PwrKeyShortTimeCallBack()
+    VoiceBatteryandSOC()
+end
+
+local function PTTIntCallback(msg)    -- PTT
+    if msg == cpu.INT_GPIO_NEGEDGE then
+	VoiceBatteryandSOC()
+    end
+end
+
+local function VolumeUpIntCallback(msg)    -- VolumeUp，gpio1
+    if msg == cpu.INT_GPIO_NEGEDGE then
+        if audioVolume < 7 then
+            audioVolume = audioVolume + 1
+            audio.play(0,"TTS",string.format("音量%d级", audioVolume),audioVolume)
+        else
+            audio.play(0,"TTS","最大音量", audioVolume)
+            audioVolume = 7
+        end
+        nvm.set("audioVolume",audioVolume)
+    end
+end
+
+local function VolumeDownIntCallback(msg)   -- VolumeDown, gpio14
+    if msg == cpu.INT_GPIO_NEGEDGE then
+        if audioVolume > 1 then
+            audioVolume = audioVolume -1
+            audio.play(0,"TTS",string.format("音量%d级", audioVolume),audioVolume)
+        else
+            audio.play(0,"TTS","静音",audioVolume)
+            audioVolume = 0
+        end
+        nvm.set("audioVolume",audioVolume)
+    end
 end
 
 --======================= NVM初始化 =======================
@@ -209,6 +254,7 @@ end
             uartdata.btwrite('AT+LENAME='..BLEname..'\r\n') 
             sys.wait(50)
         end
+
     end
 
 
@@ -253,12 +299,10 @@ local function ledsUpdate()
 	--PWR LED 
 	adcvol, batteryVoltage = adc.read(ADC_VBAT)
 	adcvol, powerVoltage = adc.read(ADC_PWR)
-	batteryVoltage = math.floor(batteryVoltage *2)
-	powerVoltage = math.floor(powerVoltage *2)
-	batteryPercent = math.floor((batteryVoltage-3400)/(42-34))   --只要百分比的整数部分
-	log.info("Battery voltage: ",batteryVoltage,'mv')
-	log.info("Power voltage: ",powerVoltage,'mv')
-	log.info("Battery pencent: ",batteryPercent,'%')
+	batteryVoltage = batteryVoltage *2
+	powerVoltage = powerVoltage *2
+	batteryPercent = math.floor((batteryVoltage-3400)/(42-34))
+	if batteryPercent > 100 then batteryPercent = 100 end
 
 	if batteryPercent > 67 then
 		led('pwr','GREEN')
@@ -273,12 +317,6 @@ local function ledsUpdate()
 	sys.wait(1000)
 	end
 end
-
---======================= UART初始化函数 =======================
-
-
---======================= UART初始化函数 =======================
-
 
 --======================= 获取设备状态=======================
 local function deviceStatus()
@@ -326,10 +364,8 @@ local function sdCardTask()
     --io.writeFile("/sdcard0/1.mp3",io.readFile("/lua/pwron.mp3"))
     --audio.play(0,"FILE","/lua/pwron.mp3",audiocore.VOL2,function() sys.publish("AUDIO_PLAY_END") end)
     audio.play(0,"FILE","/sdcard0/pwron.mp3",audiocore.VOL1,function() sys.publish("AUDIO_PLAY_END") end)
-    sys.waitUntil("AUDIO_PLAY_END")    
-    audio.play(0,"TTS","开机",audiocore.VOL1,function() sys.publish("AUDIO_PLAY_END") end)
-    sys.waitUntil("AUDIO_PLAY_END")    
-
+    sys.waitUntil("AUDIO_PLAY_END")
+	
 	--卸载SD卡，返回值0表示失败，1表示成功
 	--io.unmount(io.SDCARD)
 end
@@ -377,6 +413,7 @@ function deviceInit()
 	--1.08
 	--加载网络指示灯和LTE指示灯功能模块
 	netLed.setup(true,pio.P0_19,pio.P0_15)   --网络红灯19，网络绿灯15
+	
 	--网络指示灯功能模块中，默认配置了各种工作状态下指示灯的闪烁规律，参考netLed.lua中ledBlinkTime配置的默认值
 	--如果默认值满足不了需求，调用netLed.updateBlinkTime去配置闪烁时长
 	--LTE指示灯功能模块中，配置的是注册上4G网络灯就常亮，其余任何状态灯都会熄灭
@@ -397,11 +434,15 @@ function deviceInit()
 	--PRODUCT_KEY = "v32xEAKsGTIEQxtqgwCldp5aPlcnPs3K"
 	--update.request()
 
-	--1.12
+	--1.12 
+	--按键设置
     --长按电源键关机
     rtos.on(rtos.MSG_KEYPAD,keyMsg)
     rtos.init_module(rtos.MOD_KEYPAD,0,0,0)
     powerKey.setup(PWRKEY_LONGTIME, PwrKeyLongTimeCallBack, PwrKeyShortTimeCallBack)
+    pins.setup(PIN_PTTKEY, PTTIntCallback) -- PTT button
+    pins.setup(PIN_VOLUMEUP, VolumeUpIntCallback) -- Volume up button
+    pins.setup(PIN_VOLUMEDOWN, VolumeDownIntCallback) -- Volume down button
     
 	--1.13
 	--打开配置并打开UART接口
@@ -419,14 +460,16 @@ function deviceInit()
 
     --每5秒打印一下RAM和ROOM剩余空间
     --sys.timerLoopStart(deviceStatus, 5000)
-
 end
 
 function MainTask()
 	--初始化部分
+	sys.wait(5000)
 	uartdata.Init()
 	deviceInit()
-	sys.taskInit(sdCardTask)
+	--sys.taskInit(sdCardTask)
+    --播放开机语音
+    VoiceBatteryandSOC()
 	sys.taskInit(uartdata.Task)
 	
     while true do
