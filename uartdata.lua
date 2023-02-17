@@ -114,7 +114,8 @@ local function RTKdatatimer()
                 if logfile == nil then
                     local t = os.date("*t")
                     if t.year <2023 then
-                        logfilename = "/sdcard0/nmea/"..string.format("%06d",math.floor(tonumber(ggaarray[2])))..".nmea"
+                        --最后三位是毫秒，尽可能避免文件名冲突
+                        logfilename = "/sdcard0/nmea/"..string.format("%09d",tonumber(ggaarray[2])*1000)..".nmea"
                     else
                         logfilename = string.format("/sdcard0/nmea/%04d%02d%02d-%02d%02d%02d.nmea", t.year,t.month,t.day,t.hour,t.min,t.sec)
                     end
