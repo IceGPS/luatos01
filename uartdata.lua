@@ -19,7 +19,7 @@ USBUART = uart.USB
 --UART之间是否转发数据的标记
 USBRTK = 1
 USBBT = 0
-RTKBT = 0
+RTKBT = 1
 
 --data log部分的全局变量
 GPSFIXED = false
@@ -67,6 +67,9 @@ local RTCMReadyFlag = false   --RTCM数据完整性标记
 local RTCMUploadFlag = true   --RTCM数据是否已经上传到网络
 local counter = 0
 local usbstr = ''
+
+--从BT模组接收到的每帧整包数据
+BTRTCMRAWdata = ''
 
 --根据尾部校验和判断收到的NMEA83数据是否正确
 local function checknmea0183(nmea0183msg)
@@ -129,6 +132,21 @@ local function RTKdatatimer()
     gnggastr = ''    
 end
 
+-- BT数据完整性检查回调函数，根据时间进行判断。在BT串口回调函数每次被调用的时候都重新启动50ms定时器，等收到这个定时器消息的时候就认为数据接收完毕。
+local function BTdatatimer()   
+    local btrtcmlen = string.len(BTRTCMRAWdata)
+    if btrtcmlen > 3000 then
+        log.info("BT RTCM RAW data is too long:",btrtcmlen)
+    elseif btrtcmlen > 100 then
+        if RTKBT > 0 then 
+            rtkwrite(BTRTCMRAWdata)
+        end
+    else
+        log.info("BT RTCM RAW data is too short:",btrtcmlen)
+    end
+    BTRTCMRAWdata = ''
+end
+
 --[[
     三种类型的自定义AT指令，开头的三个字母分别是：
     1、ICE，直接控制串口转发的指令，立即生效
@@ -185,7 +203,11 @@ function btwrite(s)
 end
 
 function rtkwrite(s)
-    uart.write(RTKUART, s) 
+    if s ~= nil then 
+        uart.write(RTKUART, s)
+    else
+        log.error("rtkwrite s is nil")
+    end 
 end
 
 local function usbreader()
@@ -205,12 +227,11 @@ local function usbreader()
     end
 end
 
--- 每次被调用的时候都重新启动50ms定时器，当定时器执行的时候就知道接收到数据已经过去了50ms，就可以认为本次定位数据接收完毕
+-- 每次被调用开始和结束的时候都重新启动50ms定时器，当定时器执行的时候就知道接收到数据已经过去了50ms，就可以认为本次定位数据接收完毕
 local function rtkreader()
     local tempstr , fullstr = '',''
-    --重新设置50ms定时器
-    sys.timerStart(RTKdatatimer,100) 
-
+    --重置50ms定时器
+    sys.timerStart(RTKdatatimer,50) 
     while true do
         tempstr = uart.read(RTKUART, "*l", 0)
         if string.len(tempstr) ~= 0 then
@@ -227,23 +248,31 @@ local function rtkreader()
             break
         end
     end
+    --重置50ms定时器
+    sys.timerStart(RTKdatatimer,50) 
 end
 
 local function btreader()
-    local s    
+    --重置50ms定时器
+    sys.timerStart(BTdatatimer,50) 
+    local tempstr , fullstr = '',''
     while true do
-        s = uart.read(BTUART, "*l", 0)
-        if string.len(s) ~= 0 then
-            if PrivateATCheck(s) then
-                uart.write(BTUART,"OK\r\n")
-            else  
-                if USBBT>0 then usbwrite(s) end
-                if RTKBT>0 then rtkwrite(s) end
-            end
+        tempstr = uart.read(BTUART, "*l", 0)
+        if string.len(tempstr) ~= 0 then
+            fullstr = fullstr..tempstr
         else
+            BTRTCMRAWdata = BTRTCMRAWdata..fullstr
             break
         end
     end
+    --[[
+    if not PrivateATCheck(fullstr) then
+        if USBBT>0 then usbwrite(s) end
+        if RTKBT>0 then rtkwrite(s) end
+    end
+    ]]
+    --重置50ms定时器
+    sys.timerStart(BTdatatimer,50) 
 end
 
 function Init()
