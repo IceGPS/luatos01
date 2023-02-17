@@ -333,8 +333,7 @@ end
 local function sdCardTask()
     sys.wait(5000)
     --挂载SD卡,返回值0表示失败，1表示成功
-	
-    log.info("=======================Mount SD card: ",io.mount(io.SDCARD))
+    io.mount(io.SDCARD)
     
     --第一个参数1表示sd卡
     --第二个参数1表示返回的总空间单位为KB
@@ -345,7 +344,6 @@ local function sdCardTask()
     --第二个参数1表示返回的总空间单位为KB
     local sdCardFreeSize = rtos.get_fs_free_size(1,1)
     log.info("sd card free size "..sdCardFreeSize.." KB")
-    
     
     --遍历读取sd卡根目录下的最多10个文件或者文件夹
     if io.opendir("/sdcard0") then
@@ -360,8 +358,20 @@ local function sdCardTask()
         io.closedir("/sdcard0")
     end
     
+    --创建log目录，验证两种方法那种可以正常工作
+    if not io.exists("/sdcard0/nmea") then
+        rtos.make_dir("/sdcard0/nmea")
+    end
+    --[[这个创建目录的方法无效，因为io库里边没有mkdir函数
+    if not io.exists("/sdcard0/log1io") then
+        io.mkdir("/sdcard0/log1io")
+    end
+    ]]
+
     --向sd卡根目录下写入一个pwron.mp3
-    io.writeFile("/sdcard0/pwron.mp3",io.readFile("/lua/pwron.mp3"))
+    if not io.exists("/sdcdar0/pwron.mp3") then
+        io.writeFile("/sdcard0/pwron.mp3",io.readFile("/lua/pwron.mp3"))
+    end
     --audio.play(0,"FILE","/lua/pwron.mp3",audiocore.VOL2,function() sys.publish("AUDIO_PLAY_END") end)
     audio.play(0,"FILE","/sdcard0/pwron.mp3",audiocore.VOL1,function() sys.publish("AUDIO_PLAY_END") end)
     sys.waitUntil("AUDIO_PLAY_END")
