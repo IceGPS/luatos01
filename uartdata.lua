@@ -113,7 +113,11 @@ local function RTKdatatimer()
                 GPSFIXED = true    
                 if logfile == nil then
                     local t = os.date("*t")
-                    logfilename = string.format("/sdcard0/nmea/%04d%02d%02d-%02d%02d%02d.nmea", t.year,t.month,t.day,t.hour,t.min,t.sec)
+                    if t.year <2023 then
+                        logfilename = "/sdcard0/nmea/"..string.format("%06d",math.floor(tonumber(ggaarray[2])))..".nmea"
+                    else
+                        logfilename = string.format("/sdcard0/nmea/%04d%02d%02d-%02d%02d%02d.nmea", t.year,t.month,t.day,t.hour,t.min,t.sec)
+                    end
                 end
             end
         end
