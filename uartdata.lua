@@ -21,6 +21,12 @@ USBRTK = 1
 USBBT = 0
 RTKBT = 0
 
+--data log部分的全局变量
+GPSFIXED = false
+logfile = nil
+logfilename = ''
+
+
 --NMEA0183格式的定位消息
 gnggastrstr = ''
 gnrmcstr = ''
@@ -88,7 +94,7 @@ local function RTKdatatimer()
     if gnggastr == nil then 
         log.error('-------------------gnggastr is nil') 
     elseif string.len(gnggastr) < 30 then
-        log.error('-------------------gnggastr is to short:',gnggastr) 
+        log.error('-------------------gnggastr is too short:',gnggastr) 
     elseif checknmea0183(gnggastr) then 
         ggaarray = string.split(gnggastr,',')
         RTKFixQuality = tonumber(ggaarray[7])
@@ -96,6 +102,21 @@ local function RTKdatatimer()
         RTKdata['FIX'] = tonumber(ggaarray[7])
         RTKdata['ELEV'] = tonumber(ggaarray[10])    
         RTKdata['UTC'] = tonumber(ggaarray[2])    
+
+        --增加data log功能，把GPS模组输出的定位数据保存到TF卡上
+        if GPSFIXED then
+            if io.writeFile(logfilename,RTCMRAWdata,"a+b") then
+                log.error("NMEA0183 log file write failed") 
+            end
+        else
+            if RTKFixQuality > 0 then
+                GPSFIXED = true    
+                if logfile == nil then
+                    local t = os.date("*t")
+                    logfilename = string.format("/sdcard0/%04d%02d%02d-%02d%02d%02d.nmea", t.year,t.month,t.day,t.hour,t.min,t.sec)
+                end
+            end
+        end
     else
         log.error("GGA checksum ERROR:"..gnggastr) 
     end

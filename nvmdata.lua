@@ -7,6 +7,7 @@ require "config"
 settings = {
     audiovolume = "1",    --0-7
     rtkmode  = "ROVER",   --ROVER, BASE, MOBILE
+    rtkmodule = "P20M"    --P20M,UM960,UM980...
     network = "4G",       --4G, WIFI, ETHERNET
     protocol = "0",       --0:MQTT, 1:NTRIP
     rtcmsource = "0",     --0:BT, 1:LORA, 2:CORS

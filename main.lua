@@ -361,7 +361,7 @@ local function sdCardTask()
     end
     
     --向sd卡根目录下写入一个pwron.mp3
-    --io.writeFile("/sdcard0/1.mp3",io.readFile("/lua/pwron.mp3"))
+    io.writeFile("/sdcard0/pwron.mp3",io.readFile("/lua/pwron.mp3"))
     --audio.play(0,"FILE","/lua/pwron.mp3",audiocore.VOL2,function() sys.publish("AUDIO_PLAY_END") end)
     audio.play(0,"FILE","/sdcard0/pwron.mp3",audiocore.VOL1,function() sys.publish("AUDIO_PLAY_END") end)
     sys.waitUntil("AUDIO_PLAY_END")
@@ -467,10 +467,18 @@ function MainTask()
 	sys.wait(5000)
 	uartdata.Init()
 	deviceInit()
-	--sys.taskInit(sdCardTask)
+	sys.taskInit(sdCardTask)
+
     --播放开机语音
+	adcvol, batteryVoltage = adc.read(ADC_VBAT)
+	adcvol, powerVoltage = adc.read(ADC_PWR)
+	batteryVoltage = batteryVoltage *2
+	powerVoltage = powerVoltage *2
+	batteryPercent = math.floor((batteryVoltage-3400)/(42-34))
+	if batteryPercent > 100 then batteryPercent = 100 end
     VoiceBatteryandSOC()
-	sys.taskInit(uartdata.Task)
+
+    sys.taskInit(uartdata.Task)
 	
     while true do
         ledsUpdate()
