@@ -70,6 +70,10 @@ local usbstr = ''
 
 --从BT模组接收到的每帧整包数据
 BTRTCMRAWdata = ''
+--BT连接状态
+BTCONNECTED = false
+--建立蓝牙连接的时间
+BTConnectTime = 0
 
 --根据尾部校验和判断收到的NMEA83数据是否正确
 local function checknmea0183(nmea0183msg)
@@ -135,6 +139,11 @@ end
 -- BT数据完整性检查回调函数，根据时间进行判断。在BT串口回调函数每次被调用的时候都重新启动50ms定时器，等收到这个定时器消息的时候就认为数据接收完毕。
 local function BTdatatimer()   
     local btrtcmlen = string.len(BTRTCMRAWdata)
+    if btrtcmlen > 0 then
+        log.info("BT RTCM RAW data is:",btrtcmlen)
+        BTCONNECTED = true
+        BTConnectTime = rtos.tick()
+    end
     if btrtcmlen > 3000 then
         log.info("BT RTCM RAW data is too long:",btrtcmlen)
     elseif btrtcmlen > 100 then
@@ -189,9 +198,13 @@ end
 
 
 -- BT连接状态
+-- 由于Cube没有提供判断连接状态的管脚，所以只能根据蓝牙串口是否有收到数据判断是否已连接
 local getGpio22Input = pins.setup(pio.P0_22) 
 function GetBTConnection()
-    return (getGpio22Input() == 1 and true or false)
+    --log.info("==============BT soft:",BTCONNECTED)
+    --log.info("==============BT  pin:",(getGpio22Input() == 1 and true or false))
+    --return (getGpio22Input() == 1 and true or false)
+    return BTCONNECTED
 end
 
 function usbwrite(s)
@@ -288,6 +301,12 @@ end
 
 function Task()    
     while true do
+        if BTCONNECTED then
+            --rtos.tick()返回的是从系统启动到现在的毫秒数，单位是5ms，2秒（400*5=2000ms）未收到数据就认为蓝牙断开
+            if rtos.tick() - BTConnectTime > 400 then
+                BTCONNECTED = false
+            end
+        end
         sys.wait(1000)
     end
 end

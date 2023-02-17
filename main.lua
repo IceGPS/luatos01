@@ -230,32 +230,26 @@ end
 
 
 --======================= 蓝牙相关函数 =======================
-    --判断蓝牙连接状态
-    local getGpio22Input = pins.setup(pio.P0_22) 
-    function GetBTConnection()
-        return (getGpio22Input() == 1 and true or false)
-    end
     
-    --设置蓝牙设备名称，由于使用了sys.wait，所以必须在task中调用
-    function SetBTName(BTname,BLEname)
-        --如果是连接状态，就通过复位断开现有连接，因为只有在未连接状态发送AT指令才有效
-        if GetBTConnection() then
-            pins.setup(PIN_BT_RESET,0)
-            sys.wait(50)
-            pins.setup(PIN_BT_RESET,1)
-            sys.wait(1000)
-        end        
-        --如果是未连接状态，就可以发送AT指令设置蓝牙名称
-        if not GetBTConnection() then
-            uartdata.btwrite('AT\r\n') 
-            sys.wait(50)
-            uartdata.btwrite('AT+NAME='..BTname..'\r\n') 
-            sys.wait(50)
-            uartdata.btwrite('AT+LENAME='..BLEname..'\r\n') 
-            sys.wait(50)
-        end
-
+--设置蓝牙设备名称，由于使用了sys.wait，所以必须在task中调用
+function SetBTName(BTname,BLEname)
+    --如果是连接状态，就通过复位断开现有连接，因为只有在未连接状态发送AT指令才有效
+    if uartdata.GetBTConnection() then
+        pins.setup(PIN_BT_RESET,0)
+        sys.wait(50)
+        pins.setup(PIN_BT_RESET,1)
+        sys.wait(1000)
+    end        
+    --如果是未连接状态，就可以发送AT指令设置蓝牙名称
+    if not uartdata.GetBTConnection() then
+        uartdata.btwrite('AT\r\n') 
+        sys.wait(50)
+        uartdata.btwrite('AT+NAME='..BTname..'\r\n') 
+        sys.wait(50)
+        uartdata.btwrite('AT+LENAME='..BLEname..'\r\n') 
+        sys.wait(50)
     end
+end
 
 
 --======================= 网络初始化 =======================
@@ -270,7 +264,7 @@ end
 --电源指示灯的状态更新函数
 local function ledsUpdate()
     while true do
-	--RTK LED
+	    --RTK LED
         if uartdata.RTKFixQuality <1  then 
             led('gps','BLACK') -- 未定位，不亮
         else
@@ -289,33 +283,33 @@ local function ledsUpdate()
             end
         end
 
-	--BT  LED 
-	if GetBTConnection() then
-		led("bt","GREEN")
-	else
-		led("bt","BLACK")
-	end
-	
-	--PWR LED 
-	adcvol, batteryVoltage = adc.read(ADC_VBAT)
-	adcvol, powerVoltage = adc.read(ADC_PWR)
-	batteryVoltage = batteryVoltage *2
-	powerVoltage = powerVoltage *2
-	batteryPercent = math.floor((batteryVoltage-3400)/(42-34))
-	if batteryPercent > 100 then batteryPercent = 100 end
+        --BT  LED 
+        if uartdata.GetBTConnection() then
+            led("bt","GREEN")
+        else
+            led("bt","BLACK")
+        end
+        
+        --PWR LED 
+        adcvol, batteryVoltage = adc.read(ADC_VBAT)
+        adcvol, powerVoltage = adc.read(ADC_PWR)
+        batteryVoltage = batteryVoltage *2
+        powerVoltage = powerVoltage *2
+        batteryPercent = math.floor((batteryVoltage-3400)/(42-34))
+        if batteryPercent > 100 then batteryPercent = 100 end
 
-	if batteryPercent > 67 then
-		led('pwr','GREEN')
-	elseif batteryPercent > 33 then
-		led('pwr','YELLOW')
-	else
-		led('pwr','RED')
-	end
+        if batteryPercent > 67 then
+            led('pwr','GREEN')
+        elseif batteryPercent > 33 then
+            led('pwr','YELLOW')
+        else
+            led('pwr','RED')
+        end
 
-	--NET LED
-	
-	sys.wait(1000)
-	end
+        --NET LED
+        
+        sys.wait(1000)
+    end
 end
 
 --======================= 获取设备状态=======================
