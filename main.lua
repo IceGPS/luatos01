@@ -24,7 +24,7 @@ require "mqtt"
 
 --App代码
 require "uartdata"
---require "nvmdata"
+require "nvmdata"
 
 --======================= 全局常量和管脚定义 =======================
 DEBUGMODE = true

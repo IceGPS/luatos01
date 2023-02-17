@@ -4,7 +4,7 @@ require "bit"
 require "pins"
 require "uart"
 
---require "nvmdata"
+require "nvmdata"
 
 --UART定义
 local UART1 = 1
