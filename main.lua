@@ -291,6 +291,17 @@ function wifiinit()
     pins.setup(pio.P0_12, 1)
     sys.wait(100)
     pins.setup(pio.P0_12, 0)    --保持拉低状态WIFI模组才能正常工作
+    sys.wait(1000)
+    --断开两次AP，确保断开
+    sys.wait(100)
+    wifiRil.request("AT+CWQAP\r\n")
+    sys.wait(100)
+    wifiRil.request("AT+CWQAP\r\n")
+    sys.wait(100)
+    --关闭自动连接
+    wifiRil.request("AT+CWAUTOCONN=0\r\n")
+    sys.wait(100)
+    --开始连接WIFI
     socketESP8266.setApPara('myap','1234567890')
     link.openNetwork(link.ESP8266, para)   
     if not socket.isReady() then
@@ -303,11 +314,6 @@ function mqttinit()
     while not socket.isReady() do
         sys.wait(1000)
     end
-    IMEI = misc.getImei()
-    mqttclientid = 'BW10'..IMEI
-    mqttpubgga ='/ICE/CORS/'..IMEI..'/GGA'
-    mqttpubrtcm ='/ICE/CORS/'..IMEI..'/RTCM33'
-    log.info('MQTT topic',mqttpubgga,mqttpubrtcm)
     mqttc = mqtt.client(mqttclientid,60,mqttuser,mqttpassword)
     mqttc:connect(mqtthost,mqttport)
 end
@@ -330,7 +336,6 @@ function mqttproc()
 	
     return result or data=="timeout" or data=="APP_SOCKET_SEND_DATA"
 end
-
 
 function mqtttask()
     mqttinit()
@@ -580,23 +585,25 @@ function MainTask()
 	if batteryPercent > 100 then batteryPercent = 100 end
     VoiceBatteryandSOC()
 
+    --初始化MQTT连接需要的参数
+    IMEI = misc.getImei()
+    mqttclientid = 'BW10'..IMEI
+    mqttpubgga ='/ICE/CORS/'..IMEI..'/GGA'
+    mqttpubrtcm ='/ICE/CORS/'..IMEI..'/RTCM33'
+    log.info('MQTT topic',mqttpubgga,mqttpubrtcm)
+
     --因为会造成阻塞，因此放在最后
-    sys.wait(5000)
-    net.switchFly(true)
     wifiinit()
     mqttinit()
 
     while true do
         if socket.isReady() and (mqttc ~= nil) then
-            if uartdata.mqttgga ~= nil then
+            if uartdata.GPSFIXED and uartdata.mqttgga ~= nil and uartdata.mqttrtcm ~= nil then
                 mqttc:publish(mqttpubgga, uartdata.mqttgga) 
                 uartdata.mqttgga = nil
-            end
-            if uartdata.mqttrtcm ~= nil then
                 mqttc:publish(mqttpubrtcm, uartdata.mqttrtcm)
                 uartdata.mqttrtcm = nil
             end
-            log.info('MQTT published')
         end    
         sys.wait(1000)
     end
