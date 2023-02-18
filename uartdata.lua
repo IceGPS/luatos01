@@ -3,6 +3,8 @@ require "log"
 require "bit"
 require "pins"
 require "uart"
+require "mqtt"
+require "socket"
 
 require "nvmdata"
 
@@ -28,9 +30,12 @@ logfilename = ''
 
 
 --NMEA0183格式的定位消息
-gnggastrstr = ''
+gnggastr = ''
 gnrmcstr = ''
 gngststr = ''
+mqttgga = nil
+mqttrtcm = nil
+
 
 --解析之后的定位数据
 --[[
@@ -112,9 +117,7 @@ local function RTKdatatimer()
 
         --增加data log功能，把GPS模组输出的定位数据保存到TF卡上
         if GPSFIXED then
-            if io.writeFile(logfilename,RTCMRAWdata,"a+b") then
-                log.error("NMEA0183 log file write failed") 
-            end
+            --io.writeFile(logfilename,RTCMRAWdata,"a+b")
         else
             if RTKFixQuality > 0 then
                 GPSFIXED = true    
@@ -122,7 +125,7 @@ local function RTKdatatimer()
                     local t = os.date("*t")
                     if t.year <2023 then
                         --最后三位是毫秒，尽可能避免文件名冲突
-                        logfilename = "/sdcard0/nmea/"..string.format("%09d",tonumber(ggaarray[2])*1000)..".nmea"
+                        logfilename = string.format("/sdcard0/nmea/%09d.nmea",tonumber(ggaarray[2])*1000)
                     else
                         logfilename = string.format("/sdcard0/nmea/%04d%02d%02d-%02d%02d%02d.nmea", t.year,t.month,t.day,t.hour,t.min,t.sec)
                     end
@@ -132,6 +135,8 @@ local function RTKdatatimer()
     else
         log.error("GGA checksum ERROR:"..gnggastr) 
     end
+    mqttgga = gnggastr
+    mqttrtcm = RTCMRAWdata
     RTCMRAWdata = ''
     gnggastr = ''    
 end
@@ -203,8 +208,8 @@ local getGpio22Input = pins.setup(pio.P0_22)
 function GetBTConnection()
     --log.info("==============BT soft:",BTCONNECTED)
     --log.info("==============BT  pin:",(getGpio22Input() == 1 and true or false))
-    --return (getGpio22Input() == 1 and true or false)
-    return BTCONNECTED
+    return (getGpio22Input() == 1 and true or false)
+    --return BTCONNECTED
 end
 
 function usbwrite(s)

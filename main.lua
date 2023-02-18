@@ -32,6 +32,7 @@ DEBUGMODE = true
 PWRKEY_LONGTIME = 2000
 --电源键短按时间，单位毫秒
 PWRKEY_SHORTTIME = 50
+IMEI = ''
 
 --UART总共有4个，除了USB串口是固定的之外，其余三个都需要根据产品的实际情况做修改。
 UART_BT = 3
@@ -128,6 +129,17 @@ end
 audioVolume = 1
 batteryPercent = 0
 batteryVoltage = 0
+
+--======================= 网络和MQTT部分 ====================
+mqttc = nil
+mqttclinetid = ''
+mqtthost = ''
+mqttport = '1883'
+mqttuser = ''
+mqttpassword = ''
+mqttpubgga =''
+mqttpubrtcm =''
+
 
 --======================= 按键设置部分 ====================
 --[[
@@ -253,7 +265,75 @@ end
 
 
 --======================= 网络初始化 =======================
+--网络和MQTT初始化
+function mqttinit()
+    log.info('=================mqttinit start')
+    while not socket.isReady() do
+        sys.wait(1000)
+    end
+    IMEI = misc.getImei()
+    mqttclientid = 'BW10'..IMEI
+    mqttpubgga ='/ICE/CORS/'..IMEI..'/GGA'
+    mqttpubrtcm ='/ICE/CORS/'..IMEI..'/RTCM33'
+    log.info('MQTT topic',mqttpubgga,mqttpubrtcm)
+    mqttc = mqtt.client(mqttclientid,60,mqttuser,mqttpassword)
+    mqttc:connect(mqtthost,mqttport)
 
+    --先用盐城的网络基站数据做测试
+    --if nvmdata.settings['rtkmode'] == "ROVER" then
+    --    mqttc:subscribe('/ICE/CORS/1150201214425/RTCM33')
+    --end
+    log.info('===================mqttinit end')
+end
+
+-- MQTT订阅数据处理
+-- @param mqttClient，MQTT客户端对象
+-- @return 处理成功返回true，处理出错返回false
+function mqttproc()
+    local result,data
+    while true do
+        if mqttc ~= nil then
+            result,data = mqttc:receive(60000,"APP_SOCKET_SEND_DATA")
+        end
+        --接收到数据
+        if result then
+            log.info("mqtt received:",data.topic,string.len(data.payload))
+            uartdata.rtkwrite(data.payload)
+        end
+    end
+	
+    return result or data=="timeout" or data=="APP_SOCKET_SEND_DATA"
+end
+
+
+function mqtttask()
+    mqttinit()
+
+    while true do
+        if socket.isReady() then
+            if nvmdata.settings['rtkmode'] == "ROVER" then
+                mqttproc()
+            else
+                log.info("=============Publish GGA and RTCM33 data============")
+                if string.len(uartdata.gnggastr) > 0 then
+                    mqttc:publish(mqttpubgga, uartdata.mqttgga)
+                end
+                if string.len(uartdata.RTCMRAWdata) > 0 then
+                    mqttc:publish(mqttpubrtcm, uartdata.mqttrtcm)
+                end
+            end
+        else
+            --[[
+            mqttc:disconnect()
+            --进入飞行模式，20秒之后，退出飞行模式
+            net.switchFly(true)
+            sys.wait(20000)
+            net.switchFly(false)
+            ]]            
+        end
+        sys.wait(1000)
+    end
+end
 
 --======================= 指示灯状态更新 =======================
 --总共有4个指示灯，分别是电源指示灯、蓝牙指示灯、RTK指示灯、网络指示灯
@@ -262,7 +342,7 @@ end
 --蓝牙指示灯直接根据蓝牙状态管脚的电平来判断蓝牙连接状态
 --RTK指示灯根据GGA消息中的定位状态来判断，如果在有IMU的机型上，还需要判断IMU的校准状态
 --电源指示灯的状态更新函数
-local function ledsUpdate()
+local function ledsUpdateTask()
     while true do
 	    --RTK LED
         if uartdata.RTKFixQuality <1  then 
@@ -305,9 +385,6 @@ local function ledsUpdate()
         else
             led('pwr','RED')
         end
-
-        --NET LED
-        
         sys.wait(1000)
     end
 end
@@ -448,13 +525,7 @@ function deviceInit()
     pins.setup(PIN_VOLUMEUP, VolumeUpIntCallback) -- Volume up button
     pins.setup(PIN_VOLUMEDOWN, VolumeDownIntCallback) -- Volume down button
     
-	--1.13
-	--打开配置并打开UART接口
-
-	--1.14
-	--网络初始化及连接MQTT服务器
-
-	--1.15 设置蓝牙设备名称
+	--1.13 设置蓝牙设备名称
     deviceIMEI = misc.getImei()
     --deviceICCID = sim.getIccid()
     sixchar = string.sub(deviceIMEI,#deviceIMEI-5)
@@ -467,11 +538,12 @@ function deviceInit()
 end
 
 function MainTask()
-	--初始化部分
-	sys.wait(5000)
-	uartdata.Init()
+	--先初始化UART是因为deviceInit()中会用到蓝牙串口    
+	uartdata.Init()  
 	deviceInit()
+    sys.taskInit(ledsUpdateTask)
 	sys.taskInit(sdCardTask)
+    sys.taskInit(uartdata.Task)
 
     --播放开机语音
 	adcvol, batteryVoltage = adc.read(ADC_VBAT)
@@ -482,15 +554,25 @@ function MainTask()
 	if batteryPercent > 100 then batteryPercent = 100 end
     VoiceBatteryandSOC()
 
-    sys.taskInit(uartdata.Task)
-	
+    --因为会造成阻塞，因此放在最后
+    mqttinit()
+
     while true do
-        ledsUpdate()
+        if socket.isReady() and (mqttc ~= nil) then
+            if uartdata.mqttgga ~= nil then
+                mqttc:publish(mqttpubgga, uartdata.mqttgga) 
+                uartdata.mqttgga = nil
+            end
+            if uartdata.mqttrtcm ~= nil then
+                mqttc:publish(mqttpubrtcm, uartdata.mqttrtcm)
+                uartdata.mqttrtcm = nil
+            end
+            log.info('MQTT published')
+        end    
         sys.wait(1000)
     end
 end
 
---任务部分
 sys.taskInit(MainTask)
 
 --1表示充电开机的时候不启动GSM协议栈
