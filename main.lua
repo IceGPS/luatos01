@@ -140,7 +140,6 @@ mqttpassword = ''
 mqttpubgga =''
 mqttpubrtcm =''
 
-
 --======================= 按键设置部分 ====================
 --[[
 下面的两个函数实现的是在松开长按的电源键之前先熄灯，通过注册按键消息回调函数实现。
@@ -266,8 +265,41 @@ end
 
 --======================= 网络初始化 =======================
 --网络和MQTT初始化
+local function wifipower(enable)
+    --[[
+    if enable then
+        pmd.ldoset(15, pmd.LDO_VMMC)
+    else
+        pmd.ldoset(0, pmd.LDO_VMMC)
+    end
+    ]]
+end
+
+local para = {
+    powerFunc = wifipower
+}
+
+function wifiinit()
+    -- 切换到WIFI网络需要做的工作
+    -- 1、确保wifiRil.lua文件开头的UART_ID，确保和实际产品中WIFI模块所在的端口一致
+    -- 2、调用函数，设置WIFI热点
+    --      socketESP8266.setApPara(ssid,password)
+    -- 3、复位一下WIFI模块，先拉高再拉低即可，拉高时间不小于50ms
+    -- 4、调用函数，打开WIFI网络
+    --      link.setNetwork(link.ESP8266, para)   
+    --复位一下WIFI模块
+    pins.setup(pio.P0_12, 1)
+    sys.wait(100)
+    pins.setup(pio.P0_12, 0)    --保持拉低状态WIFI模组才能正常工作
+    socketESP8266.setApPara('myap','1234567890')
+    link.openNetwork(link.ESP8266, para)   
+    if not socket.isReady() then
+        -- 等待网络环境准备就绪，超时时间是1分钟
+        sys.waitUntil("IP_READY_IND", 60000)
+    end    
+end
+
 function mqttinit()
-    log.info('=================mqttinit start')
     while not socket.isReady() do
         sys.wait(1000)
     end
@@ -278,12 +310,6 @@ function mqttinit()
     log.info('MQTT topic',mqttpubgga,mqttpubrtcm)
     mqttc = mqtt.client(mqttclientid,60,mqttuser,mqttpassword)
     mqttc:connect(mqtthost,mqttport)
-
-    --先用盐城的网络基站数据做测试
-    --if nvmdata.settings['rtkmode'] == "ROVER" then
-    --    mqttc:subscribe('/ICE/CORS/1150201214425/RTCM33')
-    --end
-    log.info('===================mqttinit end')
 end
 
 -- MQTT订阅数据处理
@@ -555,6 +581,9 @@ function MainTask()
     VoiceBatteryandSOC()
 
     --因为会造成阻塞，因此放在最后
+    sys.wait(5000)
+    net.switchFly(true)
+    wifiinit()
     mqttinit()
 
     while true do
